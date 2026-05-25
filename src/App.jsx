@@ -23,22 +23,34 @@ export default function App() {
 
     const indianMood = classifyMood({
       label: 'Indian Market',
+      marketType: 'indian',
       change: market.niftyChange,
       secondaryChange: (market.indianAssets?.find(a => a.label === 'SENSEX')?.change || 0),
+      changes: (market.indianAssets ?? [])
+        .map((a) => a.change)
+        .filter((n) => Number.isFinite(n)),
       price: market.niftyPrice,
     });
 
     const cryptoMood = classifyMood({
       label: 'Crypto Market',
+      marketType: 'crypto',
       change: market.btcChange,
       secondaryChange: (market.cryptoAssets?.find(a => a.label === 'ETH')?.change || 0),
+      changes: (market.cryptoAssets ?? [])
+        .map((a) => a.change)
+        .filter((n) => Number.isFinite(n)),
       price: market.btcPrice,
     });
 
     const forexMood = classifyMood({
       label: 'Forex Market',
+      marketType: 'forex',
       change: (market.forexAssets?.find(a => a.label === 'EUR/USD')?.change || 0),
       secondaryChange: (market.forexAssets?.find(a => a.label === 'GBP/USD')?.change || 0),
+      changes: (market.forexAssets ?? [])
+        .map((a) => a.change)
+        .filter((n) => Number.isFinite(n)),
       price: (market.forexAssets?.find(a => a.label === 'EUR/USD')?.price || 0),
     });
 
