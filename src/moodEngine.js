@@ -8,43 +8,69 @@
  * @param {object} params
  * @param {number} params.change      - Main asset daily % change
  * @param {number} params.secondaryChange - Secondary asset daily % change
+ * @param {number[]} [params.changes] - Optional full basket of % changes
+ * @param {'indian'|'forex'|'crypto'} [params.marketType]
  * @param {number} params.price       - Current price
  * @returns {{ mood: string, score: number, reasons: string[], overrides: object }}
  */
 export function classifyMood(params) {
-  const { change = 0, secondaryChange = 0, price = 0, label = 'Market' } = params;
+  const {
+    change = 0,
+    secondaryChange = 0,
+    changes = [],
+    marketType = 'indian',
+    price = 0,
+    label = 'Market',
+  } = params;
 
-  // Composite score: weighted average
-  const composite = change * 0.7 + secondaryChange * 0.3;
+  const baseChanges = [change, secondaryChange, ...changes]
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  const uniqueChanges = baseChanges.length > 0 ? baseChanges : [0];
 
-  // Volatility proxy
-  const maxSwing = Math.max(Math.abs(change), Math.abs(secondaryChange));
+  const weights = uniqueChanges.map((_, i) => (i === 0 ? 0.45 : i === 1 ? 0.25 : 0.30 / Math.max(1, uniqueChanges.length - 2)));
+  const composite = uniqueChanges.reduce((acc, c, i) => acc + c * weights[i], 0);
 
-  // Divergence
-  const diverged = Math.sign(change) !== Math.sign(secondaryChange) && maxSwing > 1;
+  const absChanges = uniqueChanges.map((c) => Math.abs(c));
+  const maxSwing = Math.max(...absChanges);
+  const avgAbsMove = absChanges.reduce((a, b) => a + b, 0) / absChanges.length;
+  const positiveCount = uniqueChanges.filter((c) => c > 0).length;
+  const breadth = positiveCount / uniqueChanges.length;
+  const mean = uniqueChanges.reduce((a, b) => a + b, 0) / uniqueChanges.length;
+  const variance = uniqueChanges.reduce((a, b) => a + (b - mean) ** 2, 0) / uniqueChanges.length;
+  const dispersion = Math.sqrt(variance);
+
+  const diverged = breadth > 0.35 && breadth < 0.65 && dispersion > 0.5;
+
+  const thresholds = {
+    indian: { chaosSwing: 2.4, chaosDispersion: 1.2, fear: -0.45, bullish: 0.45, calmAbs: 0.28, calmDispersion: 0.22 },
+    forex: { chaosSwing: 1.1, chaosDispersion: 0.45, fear: -0.12, bullish: 0.12, calmAbs: 0.06, calmDispersion: 0.05 },
+    crypto: { chaosSwing: 6.0, chaosDispersion: 3.2, fear: -1.4, bullish: 1.4, calmAbs: 0.9, calmDispersion: 0.75 },
+  }[marketType] || { chaosSwing: 2.4, chaosDispersion: 1.2, fear: -0.45, bullish: 0.45, calmAbs: 0.28, calmDispersion: 0.22 };
 
   let mood;
   const reasons = [];
 
-  // ── Chaos: extreme volatility OR strongly divergent markets ──
-  if (maxSwing > 5 || (maxSwing > 3 && diverged)) {
+  if (maxSwing >= thresholds.chaosSwing || dispersion >= thresholds.chaosDispersion || (diverged && maxSwing > thresholds.chaosSwing * 0.7)) {
     mood = 'chaos';
-    reasons.push(`${label} volatility extreme: ${maxSwing.toFixed(2)}%`);
+    reasons.push(`${label} volatility elevated: ${maxSwing.toFixed(2)}% max swing`);
   }
-  // ── Fear: strongly negative ──
-  else if (composite < -1.5) {
+  else if (composite <= thresholds.fear && breadth <= 0.45) {
     mood = 'fear';
-    reasons.push(`${label} sentiment bearish: ${composite.toFixed(2)}%`);
+    reasons.push(`${label} bearish breadth: ${(breadth * 100).toFixed(0)}% assets up`);
   }
-  // ── Bullish: strongly positive ──
-  else if (composite > 1.2) {
+  else if (composite >= thresholds.bullish && breadth >= 0.55) {
     mood = 'bullish';
-    reasons.push(`${label} sentiment bullish: +${composite.toFixed(2)}%`);
+    reasons.push(`${label} bullish breadth: ${(breadth * 100).toFixed(0)}% assets up`);
   }
-  // ── Calm: low volatility ──
-  else {
+  // Calm only when both direction and dispersion are compressed.
+  else if (avgAbsMove <= thresholds.calmAbs && dispersion <= thresholds.calmDispersion) {
     mood = 'calm';
-    reasons.push(`${label} consolidating: ${composite.toFixed(2)}%`);
+    reasons.push(`${label} low-vol regime: ${avgAbsMove.toFixed(2)}% avg move`);
+  }
+  else {
+    mood = composite >= 0 ? 'bullish' : 'fear';
+    reasons.push(`${label} directional bias: ${composite >= 0 ? '+' : ''}${composite.toFixed(2)}%`);
   }
 
   // Normalised sentiment 0-100
@@ -52,7 +78,7 @@ export function classifyMood(params) {
   const sentimentScore = Math.round(((clampedComposite + 10) / 20) * 100);
 
   // AI confidence
-  const divergencePenalty = diverged ? 15 : 0;
+  const divergencePenalty = diverged ? 12 : 0;
   const volPenalty = Math.min(30, Math.round(maxSwing * 3));
   const aiConfidence = Math.max(40, 95 - divergencePenalty - volPenalty);
 
